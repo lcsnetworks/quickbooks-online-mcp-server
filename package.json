@@ -15,7 +15,8 @@
       "watch": "tsc --watch",
       "lint:fix": "eslint --fix",
       "lint": "eslint .",
-      "auth": "node dist/auth-server.js"
+      "auth": "node dist/auth-server.js",
+      "callback": "node callback-service/server.js"
     },
     "dependencies": {
       "@modelcontextprotocol/sdk": "^1.6.0",
