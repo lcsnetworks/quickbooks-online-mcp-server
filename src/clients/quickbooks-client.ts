@@ -69,6 +69,13 @@ class QuickbooksClient {
       
       this.accessToken = authResponse.token.access_token;
       
+      // Hardening: Capture rotated refresh token if Intuit issues a new one
+      // Per Intuit docs, apps must persist the latest refresh token returned from the refresh endpoint
+      if (authResponse.token.refresh_token && authResponse.token.refresh_token !== this.refreshToken) {
+        this.refreshToken = authResponse.token.refresh_token;
+        console.log('Refresh token rotated by QuickBooks - latest token persisted');
+      }
+      
       // Calculate expiry time
       const expiresIn = authResponse.token.expires_in || 3600; // Default to 1 hour
       this.accessTokenExpiry = new Date(Date.now() + expiresIn * 1000);
@@ -115,6 +122,14 @@ class QuickbooksClient {
       throw new Error('Quickbooks not authenticated. Call authenticate() first');
     }
     return this.quickbooksInstance;
+  }
+
+  getRefreshToken(): string | undefined {
+    return this.refreshToken;
+  }
+
+  getRealmId(): string | undefined {
+    return this.realmId;
   }
 }
 

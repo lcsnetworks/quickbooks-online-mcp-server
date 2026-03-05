@@ -281,10 +281,11 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    * 
    * This method is called when QuickBooks redirects back to the redirectUri after authorization.
    * It:
-   * 1. Validates the state parameter
+   * 1. Validates the state parameter and extracts realmId from the callback query
    * 2. Exchanges authorization code for tokens with QuickBooks
    * 3. Issues a JWT access token for the MCP client
    * 4. Returns a redirect URL for the client
+   * 5. Stores the latest refresh token for hardening against token rotation
    */
   async handleCallback(query: URLSearchParams): Promise<{
     uri: URL;
@@ -292,6 +293,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     // Extract parameters from callback
     const code = query.get("code");
     const qboState = query.get("state");
+    const realmId = query.get("realmId"); // Extract realmId from callback query
     const error = query.get("error");
 
     if (error) {
@@ -300,6 +302,11 @@ export class QBOOAuthProvider implements OAuthServerProvider {
 
     if (!code || !qboState) {
       throw new Error("Missing code or state in callback");
+    }
+
+    // Validate realmId is present (required by Intuit)
+    if (!realmId) {
+      throw new Error("Missing realmId in callback - QuickBooks authorization may have failed");
     }
 
     // Look up the stored MCP auth code by the QBO state
@@ -311,14 +318,18 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     // Exchange authorization code for tokens with QuickBooks
     const qboTokens = await this.exchangeQBOAuthorizationCode(code);
 
-    // Store credentials for the QuickBooks client
-    this.setQBOCredentials(qboTokens);
+    // Store credentials for the QuickBooks client using the callback realmId (not the token response)
+    this.setQBOCredentials({
+      accessToken: qboTokens.accessToken,
+      refreshToken: qboTokens.refreshToken,
+      realmId, // Use callback realmId, not from token response
+    });
 
     // Get scopes from the stored MCP auth code
     const scopes = storedCode.scope || [];
 
-    // Issue a JWT access token for the MCP client with the correct scopes
-    const jwtToken = await this.issueJWT(scopes, qboTokens.realmId, qboTokens.refreshToken);
+    // Issue a JWT access token for the MCP client with the callback realmId
+    const jwtToken = await this.issueJWT(scopes, realmId, qboTokens.refreshToken);
 
     // Save the JWT to the stored record so it can be retrieved during token exchange
     storedCode.jwtToken = jwtToken;
@@ -336,11 +347,13 @@ export class QBOOAuthProvider implements OAuthServerProvider {
 
   /**
    * Exchange authorization code with QuickBooks for access tokens.
+   * 
+   * Note: realmId is NOT returned by the token endpoint; it comes from the callback query string.
+   * This method only returns tokens from the token exchange response.
    */
   private async exchangeQBOAuthorizationCode(code: string): Promise<{
     accessToken: string;
     refreshToken: string;
-    realmId: string;
   }> {
     const response = await fetch(this.qboTokenUrl, {
       method: "POST",
@@ -367,7 +380,6 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     return {
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
-      realmId: tokenData.realmId,
     };
   }
 
@@ -381,6 +393,8 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     realmId: string;
   }): void {
     quickbooksClient.setCredentials(qboTokens.refreshToken, qboTokens.realmId);
+    // Note: Latest refresh token is persisted to quickbooksClient for hardening against token rotation.
+    // If Intuit returns a rotated refresh token on next refresh, it will be automatically used.
   }
 
   /**
@@ -511,15 +525,18 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    * 2. Checks token expiry
    * 3. Extracts realmId, refreshToken, and scopes from payload
    * 4. Calls quickbooksClient.setCredentials() to inject credentials
-   * 5. Returns the token payload for use in authorization
+   * 5. Uses the latest refresh token if it has been rotated (hardening for token rotation)
+   * 6. Returns the token payload for use in authorization
    */
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     try {
       const { payload } = await jwtVerify<JwtPayload>(token, new TextEncoder().encode(this.jwtSecret));
       
-      // Extract realmId and refreshToken from JWT payload and inject into QuickBooks client
+      // Extract realmId and refreshToken from JWT payload
       if (typeof payload.realmId === "string" && typeof payload.refreshToken === "string") {
-        quickbooksClient.setCredentials(payload.refreshToken, payload.realmId);
+        // Hardening: Use the latest refresh token if it's been rotated
+        const latestRefreshToken = quickbooksClient.getRefreshToken() || payload.refreshToken;
+        quickbooksClient.setCredentials(latestRefreshToken, payload.realmId);
       }
       
       // Extract scopes from JWT payload

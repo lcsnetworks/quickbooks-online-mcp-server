@@ -52,6 +52,7 @@ export default tseslint.config(
         require: "readonly",
         module: "readonly",
         exports: "readonly",
+        TextEncoder: "readonly",
       },
     },
     rules: {
