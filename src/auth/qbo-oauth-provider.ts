@@ -194,6 +194,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
   // QuickBooks OAuth configuration
   private readonly qboAuthorizeUrl: string;
   private readonly qboTokenUrl: string;
+  private readonly qboOAuthScopes: string;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly redirectUri: string;
@@ -212,6 +213,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     this.redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || "";
     this.qboAuthorizeUrl = process.env.QUICKBOOKS_AUTHORIZE_URL || "https://appcenter.intuit.com/connect/oauth2";
     this.qboTokenUrl = process.env.QUICKBOOKS_TOKEN_URL || "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+    this.qboOAuthScopes = process.env.QUICKBOOKS_OAUTH_SCOPES || "com.intuit.quickbooks.accounting";
 
     // JWT signing key
     this.jwtSecret = process.env.JWT_SECRET || "";
@@ -262,6 +264,8 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     qboAuthUrl.searchParams.set("redirect_uri", this.redirectUri);
     qboAuthUrl.searchParams.set("state", state);
     qboAuthUrl.searchParams.set("realmId", "0"); // Request new company
+    // Intuit requires scope parameter for authorization
+    qboAuthUrl.searchParams.set("scope", this.qboOAuthScopes);
     // Force standard login prompt to prevent enterprise SSO auto-routing
     qboAuthUrl.searchParams.set("prompt", "login");
 
