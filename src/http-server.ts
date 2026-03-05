@@ -4,7 +4,7 @@ import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { QuickbooksMCPServer } from "./server/qbo-mcp-server.js";
+import { createQuickbooksMCPServer } from "./server/qbo-mcp-server.js";
 import { RegisterTool } from "./helpers/register-tool.js";
 import { qboOAuthProvider } from "./auth/qbo-oauth-provider.js";
 
@@ -73,6 +73,44 @@ const app = express();
 // Parse JSON bodies
 app.use(express.json());
 
+function getAllowedHosts(issuerUrl: URL): Set<string> {
+  const configuredHosts = (process.env.ALLOWED_HOSTS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  return new Set([
+    issuerUrl.hostname.toLowerCase(),
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    ...configuredHosts,
+  ]);
+}
+
+function validateHostHeader(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const hostHeader = req.headers.host;
+  if (!hostHeader) {
+    res.status(400).json({ error: "Missing Host header" });
+    return;
+  }
+
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+  } catch {
+    res.status(400).json({ error: "Invalid Host header" });
+    return;
+  }
+
+  if (!allowedHosts.has(hostname)) {
+    res.status(403).json({ error: "Host header not allowed" });
+    return;
+  }
+
+  next();
+}
+
 // Health check endpoint (no auth required)
 app.get("/healthz", (_req, res) => {
   res.status(200).send("ok");
@@ -82,17 +120,22 @@ app.get("/healthz", (_req, res) => {
 // These handle: /authorize, /token, /register, /revoke, /.well-known/oauth-authorization-server
 // Use OAUTH_ISSUER_URL env var if set, otherwise default to production domain
 const issuerUrl = new URL(process.env.OAUTH_ISSUER_URL || `https://qbo-mcp.lcsnetworks.com`);
+const allowedHosts = getAllowedHosts(issuerUrl);
+
+app.use(validateHostHeader);
+
 app.use("/", mcpAuthRouter({ provider: qboOAuthProvider, issuerUrl }));
 
 // QuickBooks OAuth callback handler
 app.get("/callback", async (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
     const callbackUrl = new URL(req.url, process.env.OAUTH_ISSUER_URL || `https://qbo-mcp.lcsnetworks.com`);
     const result = await qboOAuthProvider.handleCallback(callbackUrl.searchParams);
     res.redirect(result.uri.toString());
   } catch (error) {
     console.error("OAuth callback error:", error);
-    res.status(500).send("OAuth callback error: " + (error instanceof Error ? error.message : String(error)));
+    res.status(500).send("OAuth callback failed");
   }
 });
 
@@ -101,11 +144,11 @@ app.get("/callback", async (req, res) => {
 // The middleware handles authentication errors internally and returns 401/403/500 as appropriate
 const bearerAuthMiddleware = requireBearerAuth({
   verifier: qboOAuthProvider,
-  resourceMetadataUrl: "https://qbo-mcp.lcsnetworks.com/.well-known/oauth-protected-resource",
+  resourceMetadataUrl: new URL("/.well-known/oauth-protected-resource", issuerUrl).toString(),
 });
 
 // Register all 50 tools to the MCP server
-function registerAllTools(server: ReturnType<typeof QuickbooksMCPServer.GetServer>) {
+function registerAllTools(server: ReturnType<typeof createQuickbooksMCPServer>) {
   // Add tools for customers
   RegisterTool(server, CreateCustomerTool);
   RegisterTool(server, GetCustomerTool);
@@ -184,21 +227,30 @@ function registerAllTools(server: ReturnType<typeof QuickbooksMCPServer.GetServe
   RegisterTool(server, SearchPurchasesTool);
 }
 
-// Initialize the MCP server once at startup
-const mcpServer = QuickbooksMCPServer.GetServer();
-registerAllTools(mcpServer);
+function createRegisteredMcpServer() {
+  const server = createQuickbooksMCPServer();
+  registerAllTools(server);
+  return server;
+}
+
+async function handleMcpRequest(
+  req: express.Request,
+  res: express.Response,
+  body?: unknown,
+) {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+  const server = createRegisteredMcpServer();
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, body);
+}
 
 // MCP endpoint handlers (POST, GET, DELETE) with per-request transport creation
 // Main /mcp endpoint
 app.post("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  // Handle the transport - pass req.body to avoid re--reading the stream
-  transport.handleRequest(req, res, req.body).catch((error) => {
+  handleMcpRequest(req, res, req.body).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -207,13 +259,7 @@ app.post("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express
 });
 
 app.get("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  transport.handleRequest(req, res).catch((error) => {
+  handleMcpRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -222,13 +268,7 @@ app.get("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.
 });
 
 app.delete("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  transport.handleRequest(req, res).catch((error) => {
+  handleMcpRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -238,13 +278,7 @@ app.delete("/mcp", bearerAuthMiddleware, async (req: express.Request, res: expre
 
 // Session-specific message endpoints
 app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  transport.handleRequest(req, res, req.body).catch((error) => {
+  handleMcpRequest(req, res, req.body).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -253,13 +287,7 @@ app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: 
 });
 
 app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  transport.handleRequest(req, res).catch((error) => {
+  handleMcpRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -268,13 +296,7 @@ app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: e
 });
 
 app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  await mcpServer.connect(transport);
-  
-  transport.handleRequest(req, res).catch((error) => {
+  handleMcpRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -294,11 +316,12 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 // Start the server
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT || 8080);
+const HOST = process.env.HOST || "0.0.0.0";
 
 const startServer = async () => {
-  app.listen(PORT, () => {
-    console.log(`HTTP MCP server listening on port ${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`HTTP MCP server listening on ${HOST}:${PORT}`);
   });
 };
 

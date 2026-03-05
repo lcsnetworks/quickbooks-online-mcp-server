@@ -1,9 +1,10 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import { SignJWT, jwtVerify } from "jose";
+import { EncryptJWT, jwtDecrypt } from "jose";
 import { Response } from "express";
 import { quickbooksClient } from "../clients/quickbooks-client.js";
 
@@ -15,12 +16,33 @@ interface JwtPayload {
   realmId: string;
   refreshToken: string;
   scopes?: string[];
-  iat: number;
-  exp: number;
-  jti: string;
-  iss: string;
-  sub: string;
-  aud: string;
+  exp?: number;
+  sub?: string;
+}
+
+const TOKEN_ISSUER = "qbo-mcp-server";
+const TOKEN_SUBJECT = "mcp-client";
+const TOKEN_AUDIENCE = "mcp-client";
+
+function validateRedirectUri(redirectUri: string): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(redirectUri);
+  } catch {
+    throw new Error("Redirect URI must be an absolute URI");
+  }
+
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol === "javascript:" || protocol === "data:") {
+    throw new Error("Redirect URI protocol is not allowed");
+  }
+
+  if (parsed.hash) {
+    throw new Error("Redirect URI fragments are not allowed");
+  }
+
+  return parsed.toString();
 }
 
 /**
@@ -35,12 +57,13 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   }
 
   async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
-    const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const redirectUris = client.redirect_uris.map(validateRedirectUri);
+    const clientId = `client_${randomUUID()}`;
     // Preserve all metadata fields from the registration request, especially scope
     const clientInfo: OAuthClientInformationFull = {
       client_id: clientId,
       client_secret: client.client_secret || this.generateClientSecret(),
-      redirect_uris: client.redirect_uris,
+      redirect_uris: redirectUris,
       grant_types: client.grant_types,
       response_types: client.response_types,
       client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -70,12 +93,7 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   }
 
   private generateClientSecret(): string {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < 64; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+    return generateRandomString(64);
   }
 }
 
@@ -154,12 +172,7 @@ class InMemoryAuthCodesStore {
  * Generates a random string for use as state parameter.
  */
 function generateRandomString(length: number = 32): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
+  return randomBytes(Math.ceil((length * 3) / 4)).toString("base64url").slice(0, length);
 }
 
 /**
@@ -167,13 +180,6 @@ function generateRandomString(length: number = 32): string {
  */
 function generateAuthorizationCode(): string {
   return generateRandomString(48);
-}
-
-/**
- * URL-safe base64 encoding.
- */
-function base64UrlEncode(data: string | Buffer): string {
-  return Buffer.from(data).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
 /**
@@ -204,6 +210,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
 
   // JWT signing key
   private readonly jwtSecret: string;
+  private readonly jwtEncryptionBytes: Uint8Array;
 
   constructor() {
     // Initialize stores
@@ -229,6 +236,8 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     if (!this.jwtSecret) {
       throw new Error("JWT_SECRET not configured. Set JWT_SECRET for signing access tokens.");
     }
+
+    this.jwtEncryptionBytes = createHash("sha256").update(this.jwtSecret).digest();
   }
 
   /**
@@ -248,6 +257,11 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
+    const redirectUri = validateRedirectUri(params.redirectUri);
+    if (!client.redirect_uris.includes(redirectUri)) {
+      throw new Error("Invalid redirect URI for registered client");
+    }
+
     // Generate a unique QBO state parameter for Intuit callback
     const qboState = generateRandomString();
 
@@ -257,6 +271,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     // Store the authorization code with both QBO state and client state
     this.authCodesStore.store(authCode, {
       ...params,
+      redirectUri,
       state: params.state,
     }, client.client_id, qboState);
 
@@ -409,21 +424,19 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    * can inject credentials into the QuickBooks client singleton.
    */
   private async issueJWT(scopes: string[], realmId: string, refreshToken: string): Promise<string> {
-    return new SignJWT({
+    return new EncryptJWT({
       scopes,
       realmId,
       refreshToken,
-      iat: Math.floor(Date.now() / 1000),
-      // 30-day expiry for access tokens
-      exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
     })
-      .setProtectedHeader({ alg: "HS256" })
+      .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
       .setIssuedAt()
       .setJti(generateRandomString()) // Unique token ID
-      .setIssuer("qbo-mcp-server")
-      .setSubject("mcp-client")
-      .setAudience("mcp-client")
-      .sign(new TextEncoder().encode(this.jwtSecret));
+      .setIssuer(TOKEN_ISSUER)
+      .setSubject(TOKEN_SUBJECT)
+      .setAudience(TOKEN_AUDIENCE)
+      .setExpirationTime("30d")
+      .encrypt(this.jwtEncryptionBytes);
   }
 
   /**
@@ -530,7 +543,11 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    */
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     try {
-      const { payload } = await jwtVerify<JwtPayload>(token, new TextEncoder().encode(this.jwtSecret));
+      const { payload } = await jwtDecrypt<JwtPayload>(token, this.jwtEncryptionBytes, {
+        issuer: TOKEN_ISSUER,
+        subject: TOKEN_SUBJECT,
+        audience: TOKEN_AUDIENCE,
+      });
       
       // Extract realmId and refreshToken from JWT payload
       if (typeof payload.realmId === "string" && typeof payload.refreshToken === "string") {
@@ -548,7 +565,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
         token,
         clientId: payload.sub || "",
         scopes,
-        expiresAt: payload.exp,
+        expiresAt: typeof payload.exp === "number" ? payload.exp : undefined,
       };
     } catch (error) {
       throw new InvalidTokenError(`Invalid access token: ${error instanceof Error ? error.message : String(error)}`);

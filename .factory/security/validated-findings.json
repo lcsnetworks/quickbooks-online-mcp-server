@@ -1,0 +1,95 @@
+{
+  "validation_id": "val-2026-03-05-qbo-mcp",
+  "validation_date": "2026-03-05T00:00:00Z",
+  "scan_mode": "full",
+  "threat_model_path": ".factory/threat-model.md",
+  "validated_findings": [
+    {
+      "id": "VULN-001",
+      "validated_severity": "HIGH",
+      "status": "CONFIRMED",
+      "stride_category": "Information Disclosure",
+      "vulnerability_type": "Cross-client MCP response leakage",
+      "file": "src/http-server.ts",
+      "exploitation_path": [
+        "Two clients connect concurrently to stateless HTTP endpoints",
+        "A single shared McpServer instance is reused across transports",
+        "Transport/server state can be overwritten across requests",
+        "One client can receive another client's response data"
+      ],
+      "recommendation": "Create a fresh MCP server per request/session and upgrade the MCP SDK to a patched version."
+    },
+    {
+      "id": "VULN-002",
+      "validated_severity": "HIGH",
+      "status": "CONFIRMED",
+      "stride_category": "Spoofing",
+      "vulnerability_type": "Predictable OAuth state, auth codes, and client secrets",
+      "file": "src/auth/qbo-oauth-provider.ts",
+      "exploitation_path": [
+        "External clients initiate OAuth flows or register dynamic clients",
+        "State, auth codes, or client secrets are generated with Math.random()",
+        "An attacker predicts or brute-forces these values",
+        "OAuth flow integrity or client identity can be subverted"
+      ],
+      "recommendation": "Use cryptographically secure randomness for all security-sensitive token material."
+    },
+    {
+      "id": "VULN-003",
+      "validated_severity": "HIGH",
+      "status": "CONFIRMED",
+      "stride_category": "Information Disclosure",
+      "vulnerability_type": "Plaintext refresh token exposure in bearer token payloads",
+      "file": "src/auth/qbo-oauth-provider.ts",
+      "exploitation_path": [
+        "OAuth callback issues a signed bearer token containing the QuickBooks refresh token",
+        "Any holder of the bearer token can decode the JWT payload without the server secret",
+        "The embedded refresh token can be extracted for longer-lived QuickBooks access"
+      ],
+      "recommendation": "Encrypt bearer tokens or replace embedded credentials with server-side indirection."
+    },
+    {
+      "id": "VULN-004",
+      "validated_severity": "HIGH",
+      "status": "CONFIRMED",
+      "stride_category": "Denial of Service",
+      "vulnerability_type": "Missing host-header validation for MCP HTTP endpoints",
+      "file": "src/http-server.ts",
+      "exploitation_path": [
+        "A malicious site targets a locally reachable or reverse-proxied MCP HTTP endpoint",
+        "The server accepts arbitrary Host headers",
+        "Browser requests can be routed across a DNS rebinding boundary to the MCP server"
+      ],
+      "recommendation": "Apply an explicit host allow-list and upgrade to a patched MCP SDK release."
+    },
+    {
+      "id": "VULN-005",
+      "validated_severity": "MEDIUM",
+      "status": "CONFIRMED",
+      "stride_category": "Spoofing",
+      "vulnerability_type": "Callback helper accepted OAuth responses without mandatory state configuration",
+      "file": "callback-service/server.js",
+      "exploitation_path": [
+        "The local callback helper is started without QUICKBOOKS_OAUTH_STATE",
+        "A forged or swapped authorization response is delivered to /callback",
+        "The helper processes the callback without enforcing state integrity"
+      ],
+      "recommendation": "Require QUICKBOOKS_OAUTH_STATE and reject callbacks whose state does not match exactly."
+    }
+  ],
+  "false_positives": [
+    {
+      "id": "DEP-001",
+      "reason": "The remaining node-quickbooks -> underscore advisory requires deeply nested attacker-controlled arrays reaching _.flatten/_.isEqual. Exposed search-tool schemas constrain criteria to flat record objects or arrays, so this was not validated as an externally reachable runtime issue in this repository."
+    }
+  ],
+  "summary": {
+    "confirmed": 5,
+    "by_severity": {
+      "critical": 0,
+      "high": 4,
+      "medium": 1,
+      "low": 0
+    }
+  }
+}
