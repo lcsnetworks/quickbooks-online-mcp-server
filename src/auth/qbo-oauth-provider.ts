@@ -210,7 +210,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     this.clientId = process.env.QUICKBOOKS_CLIENT_ID || "";
     this.clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET || "";
     this.redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || "";
-    this.qboAuthorizeUrl = process.env.QUICKBOOKS_AUTHORIZE_URL || "https://app.intuit.com/connector/oauth";
+    this.qboAuthorizeUrl = process.env.QUICKBOOKS_AUTHORIZE_URL || "https://appcenter.intuit.com/connect/oauth2";
     this.qboTokenUrl = process.env.QUICKBOOKS_TOKEN_URL || "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 
     // JWT signing key
@@ -262,6 +262,8 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     qboAuthUrl.searchParams.set("redirect_uri", this.redirectUri);
     qboAuthUrl.searchParams.set("state", state);
     qboAuthUrl.searchParams.set("realmId", "0"); // Request new company
+    // Force standard login prompt to prevent enterprise SSO auto-routing
+    qboAuthUrl.searchParams.set("prompt", "login");
 
     // Redirect to QuickBooks
     res.redirect(qboAuthUrl.toString());
