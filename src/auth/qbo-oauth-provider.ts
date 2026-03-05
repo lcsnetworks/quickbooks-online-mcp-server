@@ -478,6 +478,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
         token,
         clientId: payload.sub || "",
         scopes: Array.isArray(payload.state) ? payload.state : (payload.state ? [payload.state] : []),
+        expiresAt: payload.exp,
       };
     } catch (error) {
       throw new Error(`Invalid access token: ${error instanceof Error ? error.message : String(error)}`);

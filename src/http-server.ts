@@ -3,6 +3,7 @@
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { QuickbooksMCPServer } from "./server/qbo-mcp-server.js";
 import { RegisterTool } from "./helpers/register-tool.js";
 import { qboOAuthProvider } from "./auth/qbo-oauth-provider.js";
@@ -94,31 +95,12 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-// Bearer auth middleware using OAuth provider's verifyAccessToken
-const bearerAuthMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader) {
-    return res.status(401).json({ error: "Authorization header required" });
-  }
-  
-  const parts = authHeader.split(" ");
-  
-  if (parts.length !== 2 || parts[0] !== "Bearer") {
-    return res.status(401).json({ error: "Bearer token required" });
-  }
-  
-  const token = parts[1];
-  
-  try {
-    // Verify the JWT token using the OAuth provider
-    await qboOAuthProvider.verifyAccessToken(token);
-    next();
-  } catch (error) {
-    console.error("Token verification failed:", error);
-    return res.status(401).json({ error: "Invalid access token" });
-  }
-};
+// Bearer auth middleware using SDK's requireBearerAuth
+// Includes resource_metadata in WWW-Authenticate header for MCP client auth discovery
+const bearerAuthMiddleware = requireBearerAuth({
+  verifier: qboOAuthProvider,
+  resourceMetadataUrl: "https://qbo-mcp.lcsnetworks.com/.well-known/oauth-protected-resource",
+});
 
 // Register all 50 tools to the MCP server
 function registerAllTools(server: ReturnType<typeof QuickbooksMCPServer.GetServer>) {
