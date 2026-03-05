@@ -190,20 +190,15 @@ registerAllTools(mcpServer);
 
 // MCP endpoint handlers (POST, GET, DELETE) with per-request transport creation
 // Main /mcp endpoint
-app.post("/mcp", bearerAuthMiddleware, (req, res) => {
+app.post("/mcp", bearerAuthMiddleware, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
   
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
+  await mcpServer.connect(transport);
   
-  // Handle the transport
-  transport.handleRequest(req, res).catch((error) => {
+  // Handle the transport - pass req.body to avoid re-reading the stream
+  transport.handleRequest(req, res, req.body).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -211,17 +206,12 @@ app.post("/mcp", bearerAuthMiddleware, (req, res) => {
   });
 });
 
-app.get("/mcp", bearerAuthMiddleware, (req, res) => {
+app.get("/mcp", bearerAuthMiddleware, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
   
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
+  await mcpServer.connect(transport);
   
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
@@ -231,17 +221,12 @@ app.get("/mcp", bearerAuthMiddleware, (req, res) => {
   });
 });
 
-app.delete("/mcp", bearerAuthMiddleware, (req, res) => {
+app.delete("/mcp", bearerAuthMiddleware, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
   
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
+  await mcpServer.connect(transport);
   
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
@@ -252,17 +237,27 @@ app.delete("/mcp", bearerAuthMiddleware, (req, res) => {
 });
 
 // Session-specific message endpoints
-app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) => {
+app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
   
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
+  await mcpServer.connect(transport);
+  
+  transport.handleRequest(req, res, req.body).catch((error) => {
+    console.error("Transport request error:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
     }
   });
+});
+
+app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // Stateless
+  });
+  
+  await mcpServer.connect(transport);
   
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
@@ -272,37 +267,12 @@ app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) =
   });
 });
 
-app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) => {
+app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
   
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-  
-  transport.handleRequest(req, res).catch((error) => {
-    console.error("Transport request error:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-});
-
-app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless
-  });
-  
-  mcpServer.connect(transport).catch((error) => {
-    console.error("Failed to connect server to transport:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
+  await mcpServer.connect(transport);
   
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
