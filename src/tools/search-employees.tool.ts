@@ -6,9 +6,16 @@ import { z } from "zod";
 const toolName = "search_employees";
 const toolDescription = "Search employees in QuickBooks Online that match given criteria.";
 
+// Criteria schema (allow simple field/operator/value objects like other search tools)
+const criterionSchema = z.object({
+  field: z.string(),
+  value: z.any(),
+  operator: z.enum(["=", "<", ">", "<=", ">=", "LIKE", "IN"]).optional(),
+});
+
 // Define the expected input schema for searching employees
 const toolSchema = z.object({
-  criteria: z.array(z.any()).optional(),
+  criteria: z.array(criterionSchema).optional(),
   asc: z.string().optional(),
   desc: z.string().optional(),
   limit: z.number().optional(),
