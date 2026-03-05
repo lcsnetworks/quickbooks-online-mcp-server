@@ -200,7 +200,16 @@ app.post("/mcp", bearerAuthMiddleware, async (req, res) => {
   transport.handleRequest(req, res, req.body).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -215,7 +224,16 @@ app.get("/mcp", bearerAuthMiddleware, async (req, res) => {
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -230,7 +248,16 @@ app.delete("/mcp", bearerAuthMiddleware, async (req, res) => {
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -246,7 +273,16 @@ app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req, 
   transport.handleRequest(req, res, req.body).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -261,7 +297,16 @@ app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req, r
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -276,7 +321,16 @@ app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req
   transport.handleRequest(req, res).catch((error) => {
     console.error("Transport request error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
+      // Check if this is an authentication error from requireBearerAuth
+      const isAuthError = error instanceof Error && error.message && error.message.includes("Invalid access token");
+      if (isAuthError) {
+        res.status(401).json({
+          error: "invalid_token",
+          error_description: "Access token is invalid or expired",
+        });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 });
@@ -284,23 +338,6 @@ app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req
 // 404 handler for unknown routes
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
-});
-
-// Error handler for authentication errors (401)
-// This must come before the generic 500 error handler
-app.use((err: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  // Check if this is an authentication error from requireBearerAuth middleware
-  if (err.message && err.message.includes("Invalid access token")) {
-    console.error("Authentication error:", err.message);
-    res.status(401).json({
-      error: "invalid_token",
-      error_description: "Access token is invalid or expired",
-    });
-    return;
-  }
-  
-  // Pass other errors to the generic error handler
-  next(err);
 });
 
 // 500 error handler for unhandled exceptions
