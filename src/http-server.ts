@@ -184,6 +184,10 @@ function registerAllTools(server: ReturnType<typeof QuickbooksMCPServer.GetServe
   RegisterTool(server, SearchPurchasesTool);
 }
 
+// Initialize the MCP server once at startup
+const mcpServer = QuickbooksMCPServer.GetServer();
+registerAllTools(mcpServer);
+
 // MCP endpoint handlers (POST, GET, DELETE) with per-request transport creation
 // Main /mcp endpoint
 app.post("/mcp", bearerAuthMiddleware, (req, res) => {
@@ -191,10 +195,7 @@ app.post("/mcp", bearerAuthMiddleware, (req, res) => {
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -215,10 +216,7 @@ app.get("/mcp", bearerAuthMiddleware, (req, res) => {
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -238,10 +236,7 @@ app.delete("/mcp", bearerAuthMiddleware, (req, res) => {
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -262,10 +257,7 @@ app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) =
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -285,10 +277,7 @@ app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res) =>
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
@@ -308,10 +297,7 @@ app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, (req, res)
     sessionIdGenerator: undefined, // Stateless
   });
   
-  const server = QuickbooksMCPServer.GetServer();
-  registerAllTools(server);
-  
-  server.connect(transport).catch((error) => {
+  mcpServer.connect(transport).catch((error) => {
     console.error("Failed to connect server to transport:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
