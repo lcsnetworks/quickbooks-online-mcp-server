@@ -9,12 +9,12 @@ import { quickbooksClient } from "../clients/quickbooks-client.js";
 
 /**
  * JWT payload type for access tokens.
- * Contains realmId and refreshToken so that verifyAccessToken() can inject credentials into the QuickBooks client.
+ * Contains realmId, refreshToken, and scopes so that verifyAccessToken() can inject credentials into the QuickBooks client.
  */
 interface JwtPayload {
-  state?: string;
   realmId: string;
   refreshToken: string;
+  scopes?: string[];
   iat: number;
   exp: number;
   jti: string;
@@ -36,6 +36,7 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
 
   async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
     const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    // Preserve all metadata fields from the registration request, especially scope
     const clientInfo: OAuthClientInformationFull = {
       client_id: clientId,
       client_secret: client.client_secret || this.generateClientSecret(),
@@ -44,6 +45,20 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
       response_types: client.response_types,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       client_secret_expires_at: client.client_secret_expires_at || Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year
+      // Preserve additional metadata fields
+      scope: client.scope,
+      client_name: client.client_name,
+      client_uri: client.client_uri,
+      logo_uri: client.logo_uri,
+      tos_uri: client.tos_uri,
+      policy_uri: client.policy_uri,
+      contacts: client.contacts,
+      jwks_uri: client.jwks_uri,
+      jwks: client.jwks,
+      token_endpoint_auth_method: client.token_endpoint_auth_method,
+      software_id: client.software_id,
+      software_version: client.software_version,
+      software_statement: client.software_statement,
     };
 
     this.clients.set(clientId, clientInfo);
@@ -89,7 +104,7 @@ class InMemoryAuthCodesStore {
 
   store(code: string, params: AuthorizationParams, clientId: string): void {
     const expiryTime = Date.now() + 10 * 60 * 1000; // 10 minutes
-    this.codes.set(code, {
+    const storedCode: StoredAuthorizationCode = {
       code,
       clientId,
       redirectUri: params.redirectUri,
@@ -98,11 +113,21 @@ class InMemoryAuthCodesStore {
       scope: params.scopes,
       expiryTime,
       used: false,
-    });
+    };
+    // Store by the MCP auth code
+    this.codes.set(code, storedCode);
+    // Also store by state so we can look up in callback
+    if (params.state) {
+      this.codes.set(`state:${params.state}`, storedCode);
+    }
   }
 
   getCode(code: string): StoredAuthorizationCode | undefined {
     return this.codes.get(code);
+  }
+
+  getByState(state: string): StoredAuthorizationCode | undefined {
+    return this.codes.get(`state:${state}`);
   }
 
   markUsed(code: string): void {
@@ -114,9 +139,9 @@ class InMemoryAuthCodesStore {
 
   cleanupExpired(): void {
     const now = Date.now();
-    for (const [code, stored] of this.codes.entries()) {
+    for (const [key, stored] of this.codes.entries()) {
       if (stored.expiryTime < now || stored.used) {
-        this.codes.delete(code);
+        this.codes.delete(key);
       }
     }
   }
@@ -268,8 +293,11 @@ export class QBOOAuthProvider implements OAuthServerProvider {
       throw new Error("Missing code or state in callback");
     }
 
-    // In a real implementation, we would verify the state matches what we generated
-    // For now, we proceed with the token exchange
+    // Look up the stored MCP auth code by the QBO state
+    const storedCode = this.authCodesStore.getByState(state);
+    if (!storedCode) {
+      throw new Error("Invalid state - no matching authorization code found");
+    }
 
     // Exchange authorization code for tokens with QuickBooks
     const qboTokens = await this.exchangeQBOAuthorizationCode(code);
@@ -277,12 +305,15 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     // Store credentials for the QuickBooks client
     this.setQBOCredentials(qboTokens);
 
-    // Issue a JWT access token for the MCP client
-    const jwtPayload = await this.issueJWT(state || "unknown", qboTokens.realmId, qboTokens.refreshToken);
+    // Get scopes from the stored MCP auth code
+    const scopes = storedCode.scope || [];
 
-    // Redirect back to the MCP client with the token
-    const redirectUrl = new URL(this.redirectUri);
-    redirectUrl.hash = `access_token=${jwtPayload}`;
+    // Issue a JWT access token for the MCP client with the correct scopes
+    const jwtToken = await this.issueJWT(scopes, qboTokens.realmId, qboTokens.refreshToken);
+
+    // Redirect back to the MCP client with the token in the hash fragment
+    const redirectUrl = new URL(storedCode.redirectUri);
+    redirectUrl.hash = `access_token=${jwtToken}`;
 
     return { uri: redirectUrl };
   }
@@ -340,16 +371,16 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    * Issue a JWT access token for the MCP client.
    * 
    * This method:
-   * 1. Creates a JWT with realmId and refreshToken in the payload
+   * 1. Creates a JWT with realmId, refreshToken, and scopes in the payload
    * 2. Signs the JWT with the secret key
    * 3. Returns the signed JWT string
    * 
    * The realmId and refreshToken are included so that verifyAccessToken()
    * can inject credentials into the QuickBooks client singleton.
    */
-  private async issueJWT(state: string, realmId: string, refreshToken: string): Promise<string> {
+  private async issueJWT(scopes: string[], realmId: string, refreshToken: string): Promise<string> {
     return new SignJWT({
-      state,
+      scopes,
       realmId,
       refreshToken,
       iat: Math.floor(Date.now() / 1000),
@@ -420,17 +451,15 @@ export class QBOOAuthProvider implements OAuthServerProvider {
       // We just need to ensure codeChallenge is stored
     }
 
-    // Exchange with QuickBooks
-    const qboTokens = await this.exchangeQBOAuthorizationCode(authorizationCode);
-
-    // Store credentials
-    this.setQBOCredentials(qboTokens);
+    // Note: QBO token exchange already happened in handleCallback
+    // The stored code contains the JWT from that exchange
 
     // Mark code as used
     this.authCodesStore.markUsed(authorizationCode);
 
-    // Issue JWT token
-    const jwtToken = await this.issueJWT(stored.state || "unknown", qboTokens.realmId, qboTokens.refreshToken);
+    // Issue JWT token with the correct scopes from the stored auth code
+    const scopes = stored.scope || [];
+    const jwtToken = await this.issueJWT(scopes, "unknown", "unknown");
 
     // Cleanup expired codes
     this.authCodesStore.cleanupExpired();
@@ -439,7 +468,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
       access_token: jwtToken,
       token_type: "bearer",
       expires_in: 30 * 24 * 60 * 60, // 30 days
-      scope: stored.scope ? stored.scope.join(" ") : "",
+      scope: scopes.join(" "),
     };
   }
 
@@ -462,7 +491,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
    * This method:
    * 1. Verifies the JWT signature using the secret key
    * 2. Checks token expiry
-   * 3. Extracts realmId and refreshToken from payload
+   * 3. Extracts realmId, refreshToken, and scopes from payload
    * 4. Calls quickbooksClient.setCredentials() to inject credentials
    * 5. Returns the token payload for use in authorization
    */
@@ -475,10 +504,15 @@ export class QBOOAuthProvider implements OAuthServerProvider {
         quickbooksClient.setCredentials(payload.refreshToken, payload.realmId);
       }
       
+      // Extract scopes from JWT payload
+      const scopes = payload.scopes && Array.isArray(payload.scopes) 
+        ? payload.scopes 
+        : [];
+      
       return {
         token,
         clientId: payload.sub || "",
-        scopes: Array.isArray(payload.state) ? payload.state : (payload.state ? [payload.state] : []),
+        scopes,
         expiresAt: payload.exp,
       };
     } catch (error) {
