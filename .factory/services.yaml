@@ -1,0 +1,17 @@
+commands:
+  install: npm install
+  build: npm run build
+  typecheck: tsc --noEmit
+  lint: npm run lint
+  # No local test command — verify against production DO App after push
+
+# No local services to start.
+# The MCP server runs on DO Apps at https://qbo-mcp.lcsnetworks.com
+# Workers must NOT start the server locally — build and push to trigger DO auto-deploy.
+#
+# DO App details:
+#   App ID: c2468ad9-ddd3-45b5-83ee-beebdb6b1106
+#   URL: https://qbo-mcp.lcsnetworks.com
+#   Port: 8080
+#   Run command: node dist/index.js (updated in feat-do-deploy-m1)
+#   Auto-deploy: push to main branch on lcsnetworks/quickbooks-online-mcp-server
