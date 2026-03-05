@@ -286,6 +286,23 @@ app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
+// Error handler for authentication errors (401)
+// This must come before the generic 500 error handler
+app.use((err: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Check if this is an authentication error from requireBearerAuth middleware
+  if (err.message && err.message.includes("Invalid access token")) {
+    console.error("Authentication error:", err.message);
+    res.status(401).json({
+      error: "invalid_token",
+      error_description: "Access token is invalid or expired",
+    });
+    return;
+  }
+  
+  // Pass other errors to the generic error handler
+  next(err);
+});
+
 // 500 error handler for unhandled exceptions
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled error:", err);
