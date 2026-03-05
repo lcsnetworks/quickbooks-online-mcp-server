@@ -87,12 +87,14 @@ interface StoredAuthorizationCode {
   code: string;
   clientId: string;
   redirectUri: string;
-  state?: string;
+  qboState?: string;
+  clientState?: string;
   codeChallenge: string;
   codeChallengeMethod?: string;
   scope?: string[];
   expiryTime: number;
   used: boolean;
+  jwtToken?: string;
 }
 
 class InMemoryAuthCodesStore {
@@ -102,13 +104,14 @@ class InMemoryAuthCodesStore {
     this.codes = new Map();
   }
 
-  store(code: string, params: AuthorizationParams, clientId: string): void {
+  store(code: string, params: AuthorizationParams, clientId: string, qboState: string): void {
     const expiryTime = Date.now() + 10 * 60 * 1000; // 10 minutes
     const storedCode: StoredAuthorizationCode = {
       code,
       clientId,
       redirectUri: params.redirectUri,
-      state: params.state,
+      qboState,
+      clientState: params.state,
       codeChallenge: params.codeChallenge,
       scope: params.scopes,
       expiryTime,
@@ -116,9 +119,9 @@ class InMemoryAuthCodesStore {
     };
     // Store by the MCP auth code
     this.codes.set(code, storedCode);
-    // Also store by state so we can look up in callback
-    if (params.state) {
-      this.codes.set(`state:${params.state}`, storedCode);
+    // Also store by QBO state so we can look up in callback
+    if (qboState) {
+      this.codes.set(`qboState:${qboState}`, storedCode);
     }
   }
 
@@ -126,8 +129,8 @@ class InMemoryAuthCodesStore {
     return this.codes.get(code);
   }
 
-  getByState(state: string): StoredAuthorizationCode | undefined {
-    return this.codes.get(`state:${state}`);
+  getByQBOState(qboState: string): StoredAuthorizationCode | undefined {
+    return this.codes.get(`qboState:${qboState}`);
   }
 
   markUsed(code: string): void {
@@ -245,24 +248,24 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
-    // Generate a unique state parameter for CSRF protection
-    const state = generateRandomString();
+    // Generate a unique QBO state parameter for Intuit callback
+    const qboState = generateRandomString();
 
-    // Generate authorization code
+    // Generate authorization code for MCP client
     const authCode = generateAuthorizationCode();
 
-    // Store the authorization code and params
+    // Store the authorization code with both QBO state and client state
     this.authCodesStore.store(authCode, {
       ...params,
-      state,
-    }, client.client_id);
+      state: params.state,
+    }, client.client_id, qboState);
 
     // Build QuickBooks authorization URL
     const qboAuthUrl = new URL(this.qboAuthorizeUrl);
     qboAuthUrl.searchParams.set("client_id", this.clientId);
     qboAuthUrl.searchParams.set("response_type", "code");
     qboAuthUrl.searchParams.set("redirect_uri", this.redirectUri);
-    qboAuthUrl.searchParams.set("state", state);
+    qboAuthUrl.searchParams.set("state", qboState);
     qboAuthUrl.searchParams.set("realmId", "0"); // Request new company
     // Intuit requires scope parameter for authorization
     qboAuthUrl.searchParams.set("scope", this.qboOAuthScopes);
@@ -288,19 +291,19 @@ export class QBOOAuthProvider implements OAuthServerProvider {
   }> {
     // Extract parameters from callback
     const code = query.get("code");
-    const state = query.get("state");
+    const qboState = query.get("state");
     const error = query.get("error");
 
     if (error) {
       throw new Error(`QuickBooks authorization error: ${error} - ${query.get("error_description")}`);
     }
 
-    if (!code || !state) {
+    if (!code || !qboState) {
       throw new Error("Missing code or state in callback");
     }
 
     // Look up the stored MCP auth code by the QBO state
-    const storedCode = this.authCodesStore.getByState(state);
+    const storedCode = this.authCodesStore.getByQBOState(qboState);
     if (!storedCode) {
       throw new Error("Invalid state - no matching authorization code found");
     }
@@ -317,9 +320,16 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     // Issue a JWT access token for the MCP client with the correct scopes
     const jwtToken = await this.issueJWT(scopes, qboTokens.realmId, qboTokens.refreshToken);
 
-    // Redirect back to the MCP client with the token in the hash fragment
+    // Save the JWT to the stored record so it can be retrieved during token exchange
+    storedCode.jwtToken = jwtToken;
+
+    // Redirect back to the MCP client with authorization code in query params
     const redirectUrl = new URL(storedCode.redirectUri);
-    redirectUrl.hash = `access_token=${jwtToken}`;
+    redirectUrl.searchParams.set("code", storedCode.code);
+    // Return the original client state if provided
+    if (storedCode.clientState) {
+      redirectUrl.searchParams.set("state", storedCode.clientState);
+    }
 
     return { uri: redirectUrl };
   }
@@ -457,15 +467,17 @@ export class QBOOAuthProvider implements OAuthServerProvider {
       // We just need to ensure codeChallenge is stored
     }
 
-    // Note: QBO token exchange already happened in handleCallback
-    // The stored code contains the JWT from that exchange
+    // Get the JWT token that was created during the callback
+    const jwtToken = stored.jwtToken;
+    if (!jwtToken) {
+      throw new Error("No JWT token found - authorization flow may have failed");
+    }
+
+    // Get scopes from the stored auth code
+    const scopes = stored.scope || [];
 
     // Mark code as used
     this.authCodesStore.markUsed(authorizationCode);
-
-    // Issue JWT token with the correct scopes from the stored auth code
-    const scopes = stored.scope || [];
-    const jwtToken = await this.issueJWT(scopes, "unknown", "unknown");
 
     // Cleanup expired codes
     this.authCodesStore.cleanupExpired();
