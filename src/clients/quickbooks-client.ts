@@ -1,15 +1,8 @@
 import dotenv from "dotenv";
 import QuickBooks from "node-quickbooks";
 import OAuthClient from "intuit-oauth";
-import http from 'http';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import open from 'open';
 
 dotenv.config();
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const client_id = process.env.QUICKBOOKS_CLIENT_ID;
 const client_secret = process.env.QUICKBOOKS_CLIENT_SECRET;
 const refresh_token = process.env.QUICKBOOKS_REFRESH_TOKEN;
@@ -57,133 +50,21 @@ class QuickbooksClient {
     });
   }
 
-  private async startOAuthFlow(): Promise<void> {
-    if (this.isAuthenticating) {
-      return;
-    }
-
-    this.isAuthenticating = true;
-    const port = 8000;
-
-    return new Promise((resolve, reject) => {
-      // Create temporary server for OAuth callback
-      const server = http.createServer(async (req, res) => {
-        if (req.url?.startsWith('/callback')) {
-          try {
-            const response = await this.oauthClient.createToken(req.url);
-            const tokens = response.token;
-            
-            // Save tokens
-            this.refreshToken = tokens.refresh_token;
-            this.realmId = tokens.realmId;
-            this.saveTokensToEnv();
-            
-            // Send success response
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(`
-              <html>
-                <body style="
-                  display: flex;
-                  flex-direction: column;
-                  justify-content: center;
-                  align-items: center;
-                  height: 100vh;
-                  margin: 0;
-                  font-family: Arial, sans-serif;
-                  background-color: #f5f5f5;
-                ">
-                  <h2 style="color: #2E8B57;">✓ Successfully connected to QuickBooks!</h2>
-                  <p>You can close this window now.</p>
-                </body>
-              </html>
-            `);
-            
-            // Close server after a short delay
-            setTimeout(() => {
-              server.close();
-              this.isAuthenticating = false;
-              resolve();
-            }, 1000);
-          } catch (error) {
-            console.error('Error during token creation:', error);
-            res.writeHead(500, { 'Content-Type': 'text/html' });
-            res.end(`
-              <html>
-                <body style="
-                  display: flex;
-                  flex-direction: column;
-                  justify-content: center;
-                  align-items: center;
-                  height: 100vh;
-                  margin: 0;
-                  font-family: Arial, sans-serif;
-                  background-color: #fff0f0;
-                ">
-                  <h2 style="color: #d32f2f;">Error connecting to QuickBooks</h2>
-                  <p>Please check the console for more details.</p>
-                </body>
-              </html>
-            `);
-            this.isAuthenticating = false;
-            reject(error);
-          }
-        }
-      });
-
-      // Start server
-      server.listen(port, async () => {
-        
-        // Generate authorization URL with proper type assertion
-        const authUri = this.oauthClient.authorizeUri({
-          scope: [OAuthClient.scopes.Accounting as string],
-          state: 'testState'
-        }).toString();
-        
-        // Open browser automatically
-        await open(authUri);
-      });
-
-      // Handle server errors
-      server.on('error', (error) => {
-        console.error('Server error:', error);
-        this.isAuthenticating = false;
-        reject(error);
-      });
-    });
-  }
-
-  private saveTokensToEnv(): void {
-    const tokenPath = path.join(__dirname, '..', '..', '.env');
-    const envContent = fs.readFileSync(tokenPath, 'utf-8');
-    const envLines = envContent.split('\n');
-    
-    const updateEnvVar = (name: string, value: string) => {
-      const index = envLines.findIndex(line => line.startsWith(`${name}=`));
-      if (index !== -1) {
-        envLines[index] = `${name}=${value}`;
-      } else {
-        envLines.push(`${name}=${value}`);
-      }
-    };
-
-    if (this.refreshToken) updateEnvVar('QUICKBOOKS_REFRESH_TOKEN', this.refreshToken);
-    if (this.realmId) updateEnvVar('QUICKBOOKS_REALM_ID', this.realmId);
-
-    fs.writeFileSync(tokenPath, envLines.join('\n'));
+  setCredentials(refreshToken: string, realmId: string): void {
+    this.refreshToken = refreshToken;
+    this.realmId = realmId;
+    // Reset cached tokens to force refresh on next call
+    this.accessToken = undefined;
+    this.accessTokenExpiry = undefined;
+    this.quickbooksInstance = undefined;
   }
 
   async refreshAccessToken() {
     if (!this.refreshToken) {
-      await this.startOAuthFlow();
-      
-      // Verify we have a refresh token after OAuth flow
-      if (!this.refreshToken) {
-        throw new Error('Failed to obtain refresh token from OAuth flow');
-      }
+      throw new Error('QBO credentials not set — call setCredentials() with refreshToken and realmId first');
     }
 
     try {
-      // At this point we know refreshToken is not undefined
       const authResponse = await this.oauthClient.refreshUsingToken(this.refreshToken);
       
       this.accessToken = authResponse.token.access_token;
@@ -203,12 +84,7 @@ class QuickbooksClient {
 
   async authenticate() {
     if (!this.refreshToken || !this.realmId) {
-      await this.startOAuthFlow();
-      
-      // Verify we have both tokens after OAuth flow
-      if (!this.refreshToken || !this.realmId) {
-        throw new Error('Failed to obtain required tokens from OAuth flow');
-      }
+      throw new Error('QBO credentials not set — authenticate with OAuth first');
     }
 
     // Check if token exists and is still valid
@@ -218,7 +94,6 @@ class QuickbooksClient {
       this.accessToken = tokenResponse.access_token;
     }
     
-    // At this point we know all tokens are available
     this.quickbooksInstance = new QuickBooks(
       this.clientId,
       this.clientSecret,
