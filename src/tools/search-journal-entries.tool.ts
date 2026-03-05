@@ -6,9 +6,15 @@ import { z } from "zod";
 const toolName = "search_journal_entries";
 const toolDescription = "Search journal entries in QuickBooks Online that match given criteria.";
 
+const criterionSchema = z.object({
+  field: z.string(),
+  value: z.any(),
+  operator: z.enum(["=", "<", ">", "<=", ">=", "LIKE", "IN"]).optional(),
+});
+
 // Define the expected input schema for searching journal entries
 const toolSchema = z.object({
-  criteria: z.array(z.any()).optional(),
+  criteria: z.array(criterionSchema).optional(),
   asc: z.string().optional(),
   desc: z.string().optional(),
   limit: z.number().optional(),

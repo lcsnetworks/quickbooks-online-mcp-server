@@ -6,9 +6,15 @@ import { z } from "zod";
 const toolName = "search_purchases";
 const toolDescription = "Search purchases in QuickBooks Online that match given criteria.";
 
+const criterionSchema = z.object({
+  field: z.string(),
+  value: z.any(),
+  operator: z.enum(["=", "<", ">", "<=", ">=", "LIKE", "IN"]).optional(),
+});
+
 // Define the expected input schema for searching purchases
 const toolSchema = z.object({
-  criteria: z.array(z.any()).optional(),
+  criteria: z.array(criterionSchema).optional(),
   asc: z.string().optional(),
   desc: z.string().optional(),
   limit: z.number().optional(),
