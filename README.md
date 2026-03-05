@@ -1,59 +1,50 @@
 # QuickBooks Online MCP Server
 
-This is a Model Context Protocol (MCP) server implementation for QuickBooks Online integration.
+This is a Model Context Protocol (MCP) server implementation for QuickBooks Online integration, using HTTP transport with OAuth 2.1 Device Authorization Grant.
 
-## Setup
+## Configuration
 
-1. Install dependencies:
-```bash
-npm install
+Add the following to your MCP client configuration (e.g., `~/.factory/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "quickbooks": {
+      "type": "http",
+      "url": "https://qbo-mcp.lcsnetworks.com/mcp",
+      "disabled": false
+    }
+  }
+}
 ```
-
-2. Create a `.env` file in the root directory with the following variables:
-```env
-QUICKBOOKS_CLIENT_ID=your_client_id
-QUICKBOOKS_CLIENT_SECRET=your_client_secret
-QUICKBOOKS_ENVIRONMENT=sandbox
-```
-
-3. Get your Client ID and Client Secret:
-   - Go to the [Intuit Developer Portal](https://developer.intuit.com/)
-   - Create a new app or select an existing one
-   - Get the Client ID and Client Secret from the app's keys section
-   - Add `http://localhost:8000/callback` to the app's Redirect URIs
 
 ## Authentication
 
-There are two ways to authenticate with QuickBooks Online:
+### OAuth Flow
 
-### Option 1: Using Environment Variables
+The QuickBooks MCP server uses OAuth 2.1 for authentication. To connect:
 
-If you already have a refresh token and realm ID, you can add them directly to your `.env` file:
+1. **Click the "Authorize" button** provided by the MCP server in your AI assistant interface
+2. **Complete QuickBooks login** - You'll be redirected to QuickBooks to sign in with your credentials
+3. **Grant permissions** - Approve the requested scopes for the app
+4. **Automatic token setup** - After successful authorization, the server will store your tokens and you'll receive a 30-day access token
 
-```env
-QUICKBOOKS_REFRESH_TOKEN=your_refresh_token
-QUICKBOOKS_REALM_ID=your_realm_id
-```
+The OAuth flow is handled entirely through the HTTP interface - no local server or additional setup required on your machine.
 
-### Option 2: Using the OAuth Flow
+### Token Management
 
-If you don't have a refresh token, you can use the built-in OAuth flow:
-
-This will:
-- Start a temporary local server
-- Open your default browser automatically
-- Redirect you to QuickBooks for authentication
-- Save the tokens to your `.env` file once authenticated
-- Close automatically when complete
+- **Access tokens** are valid for approximately 30 days
+- **Refresh tokens** are used to obtain new access tokens automatically
+- The server handles token refresh transparently in the background
+- If you see "QuickBooks not connected" errors, simply repeat the authorization process
 
 ## Usage
 
-After authentication is set up, you can use the MCP server to interact with QuickBooks Online. The server provides various tools for managing customers, estimates, bills, and more.
+After authentication is complete, you can use the MCP server to interact with QuickBooks Online. The server provides various tools for managing customers, estimates, bills, and more.
 
 ## Available Tools
 
-Added tools for Create, Delete, Get, Search, Update for the following entities:
-
+The server provides Create, Delete, Get, Search, and Update tools for the following entities:
 
 - Account
 - Bill Payment
@@ -72,6 +63,7 @@ Added tools for Create, Delete, Get, Search, Update for the following entities:
 
 If you see an error message like "QuickBooks not connected", make sure to:
 
-1. Check that your `.env` file contains all required variables
-2. Verify that your tokens are valid and not expired
+1. Complete the OAuth authorization flow (click "Authorize" button)
+2. Verify that your QuickBooks credentials are correct
+3. Check that your tokens are still valid (access tokens expire after ~30 days)
 
