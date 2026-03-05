@@ -80,13 +80,14 @@ app.get("/healthz", (_req, res) => {
 
 // Mount OAuth authorization endpoints
 // These handle: /authorize, /token, /register, /revoke, /.well-known/oauth-authorization-server
-const issuerUrl = new URL(`http://localhost:${process.env.PORT || 8080}`);
+// Use OAUTH_ISSUER_URL env var if set, otherwise default to production domain
+const issuerUrl = new URL(process.env.OAUTH_ISSUER_URL || `https://qbo-mcp.lcsnetworks.com`);
 app.use("/", mcpAuthRouter({ provider: qboOAuthProvider, issuerUrl }));
 
 // QuickBooks OAuth callback handler
 app.get("/callback", async (req, res) => {
   try {
-    const callbackUrl = new URL(req.url, `http://localhost:${process.env.PORT || 8080}`);
+    const callbackUrl = new URL(req.url, process.env.OAUTH_ISSUER_URL || `https://qbo-mcp.lcsnetworks.com`);
     const result = await qboOAuthProvider.handleCallback(callbackUrl.searchParams);
     res.redirect(result.uri.toString());
   } catch (error) {
