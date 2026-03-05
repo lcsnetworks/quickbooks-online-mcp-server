@@ -2,8 +2,10 @@
 
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { QuickbooksMCPServer } from "./server/qbo-mcp-server.js";
 import { RegisterTool } from "./helpers/register-tool.js";
+import { qboOAuthProvider } from "./auth/qbo-oauth-provider.js";
 
 // Tool imports
 import { CreateInvoiceTool } from "./tools/create-invoice.tool.js";
@@ -75,14 +77,25 @@ app.get("/healthz", (_req, res) => {
   res.status(200).send("ok");
 });
 
-// Bearer auth middleware
-const bearerAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const expectedApiKey = process.env.MCP_API_KEY;
-  
-  if (!expectedApiKey) {
-    return res.status(500).json({ error: "MCP_API_KEY not configured" });
+// Mount OAuth authorization endpoints
+// These handle: /authorize, /token, /register, /revoke, /.well-known/oauth-authorization-server
+const issuerUrl = new URL(`http://localhost:${process.env.PORT || 8080}`);
+app.use("/", mcpAuthRouter({ provider: qboOAuthProvider, issuerUrl }));
+
+// QuickBooks OAuth callback handler
+app.get("/callback", async (req, res) => {
+  try {
+    const callbackUrl = new URL(req.url, `http://localhost:${process.env.PORT || 8080}`);
+    const result = await qboOAuthProvider.handleCallback(callbackUrl.searchParams);
+    res.redirect(result.uri.toString());
+  } catch (error) {
+    console.error("OAuth callback error:", error);
+    res.status(500).send("OAuth callback error: " + (error instanceof Error ? error.message : String(error)));
   }
-  
+});
+
+// Bearer auth middleware using OAuth provider's verifyAccessToken
+const bearerAuthMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
   
   if (!authHeader) {
@@ -97,11 +110,14 @@ const bearerAuthMiddleware = (req: express.Request, res: express.Response, next:
   
   const token = parts[1];
   
-  if (token !== expectedApiKey) {
-    return res.status(401).json({ error: "Invalid API key" });
+  try {
+    // Verify the JWT token using the OAuth provider
+    await qboOAuthProvider.verifyAccessToken(token);
+    next();
+  } catch (error) {
+    console.error("Token verification failed:", error);
+    return res.status(401).json({ error: "Invalid access token" });
   }
-  
-  next();
 };
 
 // Register all 50 tools to the MCP server
