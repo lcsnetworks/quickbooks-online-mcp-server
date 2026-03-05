@@ -98,26 +98,11 @@ app.get("/callback", async (req, res) => {
 
 // Bearer auth middleware using SDK's requireBearerAuth
 // Includes resource_metadata in WWW-Authenticate header for MCP client auth discovery
+// The middleware handles authentication errors internally and returns 401/403/500 as appropriate
 const bearerAuthMiddleware = requireBearerAuth({
   verifier: qboOAuthProvider,
   resourceMetadataUrl: "https://qbo-mcp.lcsnetworks.com/.well-known/oauth-protected-resource",
 });
-
-// Error handler for authentication errors from bearerAuthMiddleware
-// The middleware throws errors before the route handler executes, so we need
-// to catch them at the middleware level and return 401 instead of 500
-const bearerAuthErrorHandler: express.ErrorRequestHandler = (err: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  // Check if this is an authentication error
-  if (err.message && err.message.includes("Invalid access token")) {
-    res.status(401).json({
-      error: "invalid_token",
-      error_description: "Access token is invalid or expired",
-    });
-  } else {
-    // Pass other errors to the global error handler
-    next(err);
-  }
-};
 
 // Register all 50 tools to the MCP server
 function registerAllTools(server: ReturnType<typeof QuickbooksMCPServer.GetServer>) {
@@ -205,7 +190,7 @@ registerAllTools(mcpServer);
 
 // MCP endpoint handlers (POST, GET, DELETE) with per-request transport creation
 // Main /mcp endpoint
-app.post("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.post("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
@@ -221,7 +206,7 @@ app.post("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: expre
   });
 });
 
-app.get("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.get("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
@@ -236,7 +221,7 @@ app.get("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: expres
   });
 });
 
-app.delete("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.delete("/mcp", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
@@ -252,7 +237,7 @@ app.delete("/mcp", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: exp
 });
 
 // Session-specific message endpoints
-app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
@@ -267,7 +252,7 @@ app.post("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, bearerAuthEr
   });
 });
 
-app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });
@@ -282,7 +267,7 @@ app.get("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, bearerAuthErr
   });
 });
 
-app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, bearerAuthErrorHandler, async (req: express.Request, res: express.Response) => {
+app.delete("/mcp/sessions/:sessionId/messages", bearerAuthMiddleware, async (req: express.Request, res: express.Response) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
   });

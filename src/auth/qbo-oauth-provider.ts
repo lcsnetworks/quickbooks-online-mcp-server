@@ -2,6 +2,7 @@ import { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/
 import { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { SignJWT, jwtVerify } from "jose";
 import { Response } from "express";
 import { quickbooksClient } from "../clients/quickbooks-client.js";
@@ -481,7 +482,7 @@ export class QBOOAuthProvider implements OAuthServerProvider {
         expiresAt: payload.exp,
       };
     } catch (error) {
-      throw new Error(`Invalid access token: ${error instanceof Error ? error.message : String(error)}`);
+      throw new InvalidTokenError(`Invalid access token: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
