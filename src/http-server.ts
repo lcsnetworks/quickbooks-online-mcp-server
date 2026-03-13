@@ -7,6 +7,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { createQuickbooksMCPServer } from "./server/qbo-mcp-server.js";
 import { RegisterTool } from "./helpers/register-tool.js";
 import { qboOAuthProvider } from "./auth/qbo-oauth-provider.js";
+import { authSessionStore, AuthSession } from "./auth/auth-session-store.js";
 
 // Tool imports
 import { CreateInvoiceTool } from "./tools/create-invoice.tool.js";
@@ -131,6 +132,30 @@ app.get("/callback", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const callbackUrl = new URL(req.url, process.env.OAUTH_ISSUER_URL || `https://qbo-mcp.lcsnetworks.com`);
+    
+    // Check if this is a headless flow by looking for the headless session
+    const qboState = callbackUrl.searchParams.get("state");
+    const headlessSession = qboState ? authSessionStore.getSessionByQBOState(qboState) : null;
+    
+    if (headlessSession) {
+      // Headless flow: complete the session and show one-time code
+      try {
+        await qboOAuthProvider.handleHeadlessCallback(callbackUrl.searchParams, headlessSession);
+      } catch (callbackError: any) {
+        // Check if this is our success signal
+        if (callbackError.name === "HeadlessCallbackSuccess" && callbackError.token && callbackError.sessionId) {
+          authSessionStore.completeSession(callbackError.sessionId, callbackError.token);
+          // Redirect to the completion page
+          res.redirect(`/auth/complete/${callbackError.sessionId}`);
+          return;
+        }
+        // Re-throw other errors
+        throw callbackError;
+      }
+      return;
+    }
+    
+    // Normal flow: redirect back to client
     const result = await qboOAuthProvider.handleCallback(callbackUrl.searchParams);
     res.redirect(result.uri.toString());
   } catch (error) {
@@ -138,6 +163,167 @@ app.get("/callback", async (req, res) => {
     res.status(500).send("OAuth callback failed");
   }
 });
+
+// Headless auth endpoints for remote/headless clients
+
+// POST /auth/headless/start - Start a headless auth session
+// Body: { clientId, redirectUri, scopes, state? }
+app.post("/auth/headless/start", async (req, res) => {
+  try {
+    const { clientId, redirectUri, scopes, state } = req.body;
+    
+    if (!clientId || !redirectUri) {
+      res.status(400).json({ error: "clientId and redirectUri are required" });
+      return;
+    }
+
+    // Create a new headless auth session
+    const session = authSessionStore.createSession({
+      clientId,
+      redirectUri,
+      scopes: scopes || [],
+      state,
+    });
+
+    // Return the session ID and the browser URL the user should open
+    const browserUrl = new URL(`/auth/browser/${session.sessionId}`, issuerUrl).toString();
+
+    res.json({
+      sessionId: session.sessionId,
+      browserUrl,
+      expiresAt: session.expiresAt,
+    });
+  } catch (error) {
+    console.error("Headless auth start error:", error);
+    res.status(500).json({ error: "Failed to start headless auth" });
+  }
+});
+
+// GET /auth/browser/:sessionId - Browser URL for user to open
+// This redirects to QuickBooks OAuth
+app.get("/auth/browser/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = authSessionStore.getSession(sessionId);
+
+    if (!session) {
+      res.status(404).send("Session not found or expired");
+      return;
+    }
+
+    // Generate QBO state and store it with the session
+    const qboState = randomBytes(16).toString("base64url");
+    authSessionStore.setQBOState(sessionId, qboState);
+
+    // Build QuickBooks authorization URL
+    const qboAuthUrl = new URL(process.env.QUICKBOOKS_AUTHORIZE_URL || "https://appcenter.intuit.com/connect/oauth2");
+    const clientId = process.env.QUICKBOOKS_CLIENT_ID;
+    const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${issuerUrl.origin}/callback`;
+    const scopes = process.env.QUICKBOOKS_OAUTH_SCOPES || "com.intuit.quickbooks.accounting";
+    
+    if (!clientId) {
+      res.status(500).send("QUICKBOOKS_CLIENT_ID not configured");
+      return;
+    }
+    
+    qboAuthUrl.searchParams.set("client_id", clientId);
+    qboAuthUrl.searchParams.set("response_type", "code");
+    qboAuthUrl.searchParams.set("redirect_uri", redirectUri);
+    qboAuthUrl.searchParams.set("state", qboState);
+    qboAuthUrl.searchParams.set("realmId", "0");
+    qboAuthUrl.searchParams.set("scope", scopes);
+    qboAuthUrl.searchParams.set("prompt", "login");
+
+    res.redirect(qboAuthUrl.toString());
+  } catch (error) {
+    console.error("Browser auth error:", error);
+    res.status(500).send("Authorization failed");
+  }
+});
+
+// GET /auth/complete/:sessionId - Show one-time code after successful OAuth
+app.get("/auth/complete/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = authSessionStore.getSession(sessionId);
+
+    if (!session) {
+      res.status(404).send("Session not found or expired");
+      return;
+    }
+
+    if (session.status !== "completed" || !session.oneTimeCode) {
+      // Poll redirect - wait for completion
+      res.setHeader("Refresh", "2;url=/auth/complete/" + sessionId);
+      res.send(`<!doctype html>
+<html><body style="font-family: sans-serif; max-width: 600px; margin: 40px auto; text-align: center;">
+  <h2>Completing authorization...</h2>
+  <p>Please wait while we finalize your session.</p>
+</body></html>`);
+      return;
+    }
+
+    // Show the one-time code
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+    res.send(`<!doctype html>
+<html><body style="font-family: sans-serif; max-width: 600px; margin: 40px auto;">
+  <h2>Authorization Complete</h2>
+  <p>Copy this code and paste it into your application:</p>
+  <div style="background:#f5f5f5; padding:20px; border-radius:8px; text-align:center; font-size:24px; letter-spacing:4px; font-family:monospace;">
+    ${session.oneTimeCode}
+  </div>
+  <p style="color:#666; font-size:14px;">This code expires in 5 minutes. Do not share this code.</p>
+</body></html>`);
+  } catch (error) {
+    console.error("Complete page error:", error);
+    res.status(500).send("Error completing authorization");
+  }
+});
+
+// POST /auth/redeem - Exchange one-time code for MCP token
+// Body: { sessionId, code }
+app.post("/auth/redeem", async (req, res) => {
+  try {
+    const { sessionId, code } = req.body;
+
+    if (!sessionId || !code) {
+      res.status(400).json({ error: "sessionId and code are required" });
+      return;
+    }
+
+    const token = authSessionStore.redeemCode(sessionId, code);
+    
+    res.json({
+      access_token: token,
+      token_type: "bearer",
+      expires_in: 30 * 24 * 60 * 60, // 30 days
+    });
+  } catch (error) {
+    console.error("Code redeem error:", error);
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid or expired code" });
+  }
+});
+
+// GET /auth/status/:sessionId - Check headless session status
+app.get("/auth/status/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+  const session = authSessionStore.getSession(sessionId);
+
+  if (!session) {
+    res.status(404).json({ status: "not_found" });
+    return;
+  }
+
+  res.json({
+    status: session.status,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+  });
+});
+
+// Import randomBytes for the browser endpoint
+import { randomBytes } from "node:crypto";
 
 // Bearer auth middleware using SDK's requireBearerAuth
 // Includes resource_metadata in WWW-Authenticate header for MCP client auth discovery

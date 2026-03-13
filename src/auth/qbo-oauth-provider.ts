@@ -7,6 +7,21 @@ import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import { EncryptJWT, jwtDecrypt } from "jose";
 import { Response } from "express";
 import { quickbooksClient } from "../clients/quickbooks-client.js";
+import { AuthSession } from "./auth-session-store.js";
+
+/**
+ * Custom error class to signal successful headless callback.
+ * The token and sessionId are passed via this error so http-server can complete the session.
+ */
+class HeadlessCallbackSuccess extends Error {
+  constructor(
+    public readonly token: string,
+    public readonly sessionId: string
+  ) {
+    super("Headless callback completed successfully");
+    this.name = "HeadlessCallbackSuccess";
+  }
+}
 
 /**
  * JWT payload type for access tokens.
@@ -358,6 +373,58 @@ export class QBOOAuthProvider implements OAuthServerProvider {
     }
 
     return { uri: redirectUrl };
+  }
+
+  /**
+   * Handle OAuth callback for headless auth flow.
+   * 
+   * This method:
+   * 1. Validates the state parameter and extracts realmId from the callback query
+   * 2. Exchanges authorization code for tokens with QuickBooks
+   * 3. Issues a JWT access token for the MCP client
+   * 4. Stores the JWT in the auth session and generates a one-time code
+   * 5. The one-time code is then displayed to the user for copy/paste to the client
+   */
+  async handleHeadlessCallback(query: URLSearchParams, session: AuthSession): Promise<void> {
+    // Extract parameters from callback
+    const code = query.get("code");
+    const qboState = query.get("state");
+    const realmId = query.get("realmId");
+    const error = query.get("error");
+
+    if (error) {
+      throw new Error(`QuickBooks authorization error: ${error} - ${query.get("error_description")}`);
+    }
+
+    if (!code || !qboState) {
+      throw new Error("Missing code or state in callback");
+    }
+
+    if (!realmId) {
+      throw new Error("Missing realmId in callback - QuickBooks authorization may have failed");
+    }
+
+    // Exchange authorization code for tokens with QuickBooks
+    const qboTokens = await this.exchangeQBOAuthorizationCode(code);
+
+    // Store credentials for the QuickBooks client
+    this.setQBOCredentials({
+      accessToken: qboTokens.accessToken,
+      refreshToken: qboTokens.refreshToken,
+      realmId,
+    });
+
+    // Issue a JWT access token for the MCP client
+    const jwtToken = await this.issueJWT(session.scopes, realmId, qboTokens.refreshToken);
+
+    // The session is already updated with qboState in http-server.ts
+    // Now we need to complete it - but we need access to authSessionStore
+    // Since we can't import it here (circular dependency), we'll handle this differently
+    // by returning the token and letting http-server complete the session
+    
+    // For now, throw an error to signal that http-server should complete the session
+    // Actually, let's return a special response that http-server can detect
+    throw new HeadlessCallbackSuccess(jwtToken, session.sessionId);
   }
 
   /**
